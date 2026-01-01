@@ -22,7 +22,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: web-api
-        image: web-api:v2
+        image: web-api:latest
         imagePullPolicy: Never
         ports:
         - containerPort: 8000
