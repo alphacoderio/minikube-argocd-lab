@@ -1,41 +1,70 @@
 # GitOps-Driven Deployment on Minikube
 
 ## Overview
-This project demonstrates a production-grade GitOps workflow using Minikube, ArgoCD, and a Python REST API with HTTPS ingress.
+This project demonstrates a production-grade workflow combining Infrastructure as Code (Terraform) and GitOps (ArgoCD). Terraform generates Kubernetes manifest files, which are then automatically deployed by ArgoCD.
+
+## Architecture
+**Terraform** → Generates YAML Manifests → **Git** → **ArgoCD** → Deploys to **Minikube**
+
+See `architecture-diagram.png` for detailed system architecture.
 
 ## Prerequisites
 - macOS with Docker Desktop installed
 - Minikube
 - kubectl
-- Helm (for ArgoCD installation)
+- Terraform
 - ArgoCD CLI
 - Git
 
-## Architecture
-See `architecture-diagram.png` for system architecture visualization.
-
 ## Project Structure
 ```
-.
+minikube-argocd-lab/
 ├── app/
-│   ├── main.py                # Python REST API
+│   ├── main.py                # Python FastAPI application
 │   ├── Dockerfile             # Non-root container image
 │   └── requirements.txt       # Python dependencies
-├── k8s/
-│   ├── namespace.yaml         # web-api namespace
-│   ├── deployment.yaml        # Web API deployment
-│   ├── service.yaml           # Service definition
-│   ├── ingress.yaml           # HTTPS ingress with TLS
-│   └── tls-secret.yaml        # TLS certificate secret
-├── argocd/
-│   └── application.yaml       # ArgoCD Application manifest
 ├── terraform/
 │   ├── main.tf                # Terraform configuration
-│   ├── variables.tf
-│   └── outputs.tf
+│   ├── variables.tf           # Variable definitions
+│   ├── outputs.tf             # Output definitions
+│   └── templates/             # YAML templates
+│       ├── namespace.yaml.tpl
+│       ├── tls-secret.yaml.tpl
+│       ├── deployment.yaml.tpl
+│       ├── service.yaml.tpl
+│       └── ingress.yaml.tpl
+├── k8s/                       # Generated manifests (managed by ArgoCD)
+│   ├── namespace.yaml
+│   ├── tls-secret.yaml
+│   ├── deployment.yaml
+│   ├── service.yaml
+│   └── ingress.yaml
+├── argocd/
+│   └── application.yaml       # ArgoCD Application definition
 ├── architecture-diagram.png
 └── README.md
 ```
+
+## Technology Stack
+- **Minikube**: Local Kubernetes cluster with Docker driver
+- **Terraform**: Generates Kubernetes manifest files
+- **ArgoCD**: GitOps continuous delivery
+- **Python 3.10 + FastAPI**: REST API application
+- **Uvicorn**: ASGI server
+- **Docker**: Container runtime
+- **Nginx Ingress**: Traffic management and TLS termination
+
+## Workflow
+
+### How It Works
+1. **Terraform** generates Kubernetes YAML manifests from templates
+2. Developer commits generated manifests to **Git**
+3. **ArgoCD** monitors the Git repository
+4. **ArgoCD** automatically deploys changes to Minikube
+
+This combines:
+- **IaC**: Infrastructure defined in Terraform
+- **GitOps**: Declarative deployment via ArgoCD
 
 ## Setup Instructions
 
@@ -60,12 +89,13 @@ kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
 # Wait for ArgoCD to be ready
-kubectl wait --for=condition=ready pod -l app.kubernetes.in/name=argocd-server -n argocd --timeout=300s
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server -n argocd --timeout=300s
 
 # Get initial admin password
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
+echo
 
-# Port forward to access ArgoCD UI
+# Port forward to access ArgoCD UI (in separate terminal)
 kubectl port-forward svc/argocd-server -n argocd 8080:443
 ```
 
@@ -73,69 +103,104 @@ Access ArgoCD at: https://localhost:8080
 - Username: `admin`
 - Password: (from command above)
 
-### 3. Create TLS Certificate
-```bash
-# Generate certificate
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-  -keyout tls.key -out tls.crt \
-  -subj "/CN=web.local/O=web-api"
+### 3. Build Application Image
 
-# Encode to base64
-cat tls.crt | base64 | tr -d '\n'
-cat tls.key | base64 | tr -d '\n'
+**Important:** Use version tags (not `:latest`) to enable proper GitOps workflow.
+
+```bash
+# Navigate to app directory
+cd app
+
+# Point to Minikube's Docker daemon
+eval $(minikube docker-env)
+
+# Build with version tag (increment for each new version)
+docker build -t web-api:v1.0 .
+
+# Verify image was created
+docker images | grep web-api
 ```
 
-### 4. Apply Terraform Configuration
-```bash
-cd terraform
+**Note:** Each time you make changes, increment the version (v1.0 → v1.1 → v2.0, etc.). This allows ArgoCD to detect changes when the deployment manifest is updated.
 
-# Initialize Terraform
+### 4. Generate Manifests with Terraform
+
+```bash
+# Navigate to terraform directory
+cd ../terraform
+
+# Initialize Terraform (first time only)
 terraform init
 
-# Review planned changes
+# Review what will be generated
 terraform plan
 
-# Apply configuration
-terraform apply -auto-approve
+# Generate the manifest files
+terraform apply
+
+# When prompted, type 'yes' to confirm
 ```
 
-### 5. Deploy Application via ArgoCD
+This creates YAML files in the `k8s/` directory with your specified image version:
+- `namespace.yaml`
+- `tls-secret.yaml` (with auto-generated certificate)
+- `deployment.yaml` (with image: web-api:v1.0)
+- `service.yaml`
+- `ingress.yaml`
+
+### 5. Commit Generated Manifests to Git
+```bash
+cd ..
+git add k8s/
+git commit -m "Generate Kubernetes manifests with Terraform"
+git push
+```
+
+### 6. Deploy with ArgoCD
 ```bash
 # Apply ArgoCD Application
 kubectl apply -f argocd/application.yaml
 
-# Sync application (or wait for auto-sync)
-argocd app sync web-api --port-forward --port-forward-namespace argocd
+# Watch ArgoCD sync (in separate terminal or ArgoCD UI)
+kubectl get application web-api -n argocd -w
+
+# Or use ArgoCD CLI
+argocd app get web-api --port-forward --port-forward-namespace argocd
 ```
 
-### 6. Configure Local DNS
-Add to `/etc/hosts`:
-```
-127.0.0.1 web.local
-```
-
-### 7. Access the Application
+### 7. Configure Local DNS
 ```bash
-# Start Minikube tunnel (in a separate terminal)
+echo "127.0.0.1 web.local" | sudo tee -a /etc/hosts
+```
+
+### 8. Start Minikube Tunnel
+In a **separate terminal**, run:
+```bash
 minikube tunnel
+# Keep this running
+```
 
-# Test HTTP redirect to HTTPS
-curl -L http://web.local
+### 9. Access the Application
+```bash
+# Test HTTP to HTTPS redirect
+curl -v http://web.local 2>&1 | grep -i location
 
-# Test HTTPS endpoint (with self-signed cert)
+# Test HTTPS endpoints
 curl -k https://web.local/
 curl -k https://web.local/health
 ```
 
 ## Application Endpoints
 
-- `GET /` - Welcome message
-- `GET /health` - Health check endpoint
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/` | GET | Welcome message with version |
+| `/health` | GET | Health check endpoint |
 
 ## Security Features
 
 ### Non-Root Container
-The application runs as user `appuser` (UID 1000) with the following security context:
+The application runs as user `appuser` (UID 1000):
 ```yaml
 securityContext:
   runAsNonRoot: true
@@ -143,86 +208,95 @@ securityContext:
   fsGroup: 1000
 ```
 
+Verify:
+```bash
+kubectl exec -it $(kubectl get pod -l app=web-api -n web-api -o jsonpath='{.items[0].metadata.name}') -n web-api -- id
+# Output: uid=1000(appuser) gid=1000(appuser)
+```
+
 ### TLS/HTTPS
 - All HTTP traffic (port 80) is redirected to HTTPS (port 443)
 - TLS termination at ingress level
-- Self-signed certificate stored as Kubernetes Secret
+- Self-signed certificate auto-generated by Terraform
 
-## GitOps Workflow
+## Making Changes
 
-1. Developer pushes code changes to GitHub
-2. ArgoCD detects changes in the repository (monitors `k8s/` folder)
-3. ArgoCD automatically syncs and deploys to web-api namespace
-4. Application is updated with zero-downtime rolling update
-
-## Monitoring
-
-### Check Application Status
+### Update Infrastructure (Terraform)
 ```bash
-# View pods
-kubectl get pods -n web-api
+# 1. Modify Terraform variables or templates
+cd terraform
 
-# View application logs
-kubectl logs -f deployment/web-api -n web-api
+# 2. Regenerate manifests
+terraform apply
 
-# Check ingress status
-kubectl get ingress -n web-api
+# 3. Commit changes to Git
+cd ..
+git add k8s/
+git commit -m "Update infrastructure configuration"
+git push
+
+# 4. ArgoCD will automatically detect and sync changes
 ```
 
-### ArgoCD Application Status
+### Update Application Code
 ```bash
-# Via CLI
-argocd app get web-api --port-forward --port-forward-namespace argocd
+# 1. Modify code in app/main.py
 
-# Via UI
-# Navigate to https://localhost:8080
+# 2. Rebuild image
+cd app
+eval $(minikube docker-env)
+# Build with version tag (increment for each new version)
+docker build -t web-api:v2.0 .
+
+# 3. Restart deployment
+kubectl rollout restart deployment/web-api -n web-api
+
+# Or let ArgoCD handle it if you update the image tag
 ```
 
-## Troubleshooting
-
-### Pod not starting
-```bash
-kubectl describe pod <pod-name> -n web-api
-kubectl logs <pod-name> -n web-api
-```
-
-### Ingress not working
-```bash
-kubectl describe ingress web-api -n web-api
-minikube addons list | grep ingress
-
-# Make sure minikube tunnel is running
-minikube tunnel
-```
-
-### ArgoCD sync issues
-```bash
-argocd app get web-api --port-forward --port-forward-namespace argocd
-argocd app sync web-api --force --port-forward --port-forward-namespace argocd
-```
 
 ## Cleanup
+
 ```bash
 # Delete ArgoCD application
 kubectl delete -f argocd/application.yaml
 
-# Delete Terraform resources
-cd terraform && terraform destroy -auto-approve
+# Delete namespace
+kubectl delete namespace web-api
 
 # Delete ArgoCD
 kubectl delete namespace argocd
 
+# Clean up Terraform state
+cd terraform
+terraform destroy
+
 # Stop Minikube
 minikube stop
 
-# Delete Minikube cluster (optional)
+# (Optional) Delete cluster
 minikube delete
 ```
 
-## Technologies Used
-- **Minikube**: Local Kubernetes cluster
-- **ArgoCD**: GitOps continuous delivery
-- **Python 3.10**: REST API development
-- **Docker**: Container runtime
-- **Terraform**: Infrastructure as Code
-- **Nginx Ingress**: Traffic management and TLS termination
+## Project Highlights
+
+✅ **Infrastructure as Code**: Terraform generates all Kubernetes manifests  
+✅ **GitOps**: ArgoCD provides declarative continuous delivery  
+✅ **Security**: Non-root containers, TLS encryption, HTTPS redirect  
+✅ **Automation**: Changes auto-deployed via ArgoCD  
+✅ **Production-Ready**: Health checks, resource limits, replicas  
+✅ **Best Practices**: Combines IaC and GitOps methodologies  
+
+## Workflow Summary
+
+```
+Developer
+   ↓
+Terraform (generates YAML)
+   ↓
+Git Repository (k8s/*.yaml)
+   ↓
+ArgoCD (monitors & deploys)
+   ↓
+Minikube Cluster
+```
