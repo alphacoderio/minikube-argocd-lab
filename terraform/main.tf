@@ -19,7 +19,9 @@ resource "local_file" "deployment" {
 # Generate service manifest
 resource "local_file" "service" {
   content = templatefile("${path.module}/templates/service.yaml.tpl", {
-    namespace = var.namespace
+    namespace    = var.namespace
+    service_name = var.service_name
+    app_name     = var.app_name
   })
   filename = "${path.module}/../k8s/service.yaml"
 }

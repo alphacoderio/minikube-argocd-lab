@@ -21,3 +21,15 @@ variable "ingress_host" {
   type        = string
   default     = "web.local"
 }
+
+variable "service_name" {
+  description = "Name of the Kubernetes service"
+  type        = string
+  default     = "web-api-service"
+}
+
+variable "app_name" {
+  description = "Application name used for labels and resource names"
+  type        = string
+  default     = "web-api"
+}

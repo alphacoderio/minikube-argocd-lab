@@ -1,14 +1,14 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: web-api-service
+  name: ${service_name}
   namespace: ${namespace}
   labels:
-    app: web-api
+    app: ${app_name}
     managed-by: terraform
 spec:
   selector:
-    app: web-api
+    app: ${app_name}
   ports:
   - port: 80
     targetPort: 8000
