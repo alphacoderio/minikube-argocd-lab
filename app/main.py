@@ -8,4 +8,4 @@ def health():
 
 @app.get("/")
 def root():
-    return {"message": "Hello from Minikube", "Version": "3"}
+    return {"message": "Hello from Minikube", "Version": "4"}
