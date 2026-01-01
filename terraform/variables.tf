@@ -7,13 +7,13 @@ variable "namespace" {
 variable "replicas" {
   description = "Number of replicas for the deployment"
   type        = number
-  default     = 1
+  default     = 2
 }
 
 variable "image_name" {
-  description = "Docker image name and tag"
+  description = "Docker image name and tag for the web API"
   type        = string
-  default     = "web-api:latest"
+  default     = "web-api:v2"
 }
 
 variable "ingress_host" {
